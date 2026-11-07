@@ -1,0 +1,19 @@
+[project]
+name = "comfyui-sakuranbo"
+description = "Generate images and videos in ComfyUI with the Sakuranbo AI API."
+version = "0.1.0"
+license = { file = "LICENSE" }
+authors = [{ name = "Sakuranbo AI", email = "support@sakuranbo.ai" }]
+requires-python = ">=3.10"
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/ai-yozora/comfyui-sakuranbo"
+Documentation = "https://sakuranbo.ai/docs/"
+"Bug Tracker" = "https://github.com/ai-yozora/comfyui-sakuranbo/issues"
+
+[tool.comfy]
+PublisherId = "sakuranbo"
+DisplayName = "Sakuranbo AI"
+Icon = "https://sakuranbo.ai/logo.png"
+includes = []
