@@ -13,7 +13,7 @@ Documentation = "https://sakuranbo.ai/docs/"
 "Bug Tracker" = "https://github.com/ai-yozora/comfyui-sakuranbo/issues"
 
 [tool.comfy]
-PublisherId = "sakuranbo"
+PublisherId = "sakuranboai"
 DisplayName = "Sakuranbo AI"
 Icon = "https://sakuranbo.ai/logo.png"
 includes = []
