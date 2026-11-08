@@ -1,4 +1,4 @@
-"""A small client for the Sakuranbo AI API, using only the Python standard library."""
+"""A small client for the Sakuranbo AI API, using requests, which ships with ComfyUI."""
 
 from __future__ import annotations
 
@@ -6,12 +6,12 @@ import json
 import os
 import re
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 import uuid
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlsplit
+
+import requests
 
 
 def _version() -> str:
@@ -90,6 +90,31 @@ def error_from(error: dict, fallback: str) -> SakuranboError:
     return SakuranboError(f"Sakuranbo AI: {code}: {message}{suffix}")
 
 
+def _send(method: str, url: str, *, headers: dict, timeout: float, body: dict | None = None) -> requests.Response:
+    """Send a request, retrying 429, 502, 503, and network errors, waiting for Retry-After.
+
+    Returns the last response whatever its status, and raises the last network error.
+    """
+    attempt = 0
+    while True:
+        try:
+            response = requests.request(method, url, headers=headers, json=body, timeout=timeout)
+        except (requests.ConnectionError, requests.Timeout):
+            if attempt >= RETRIES:
+                raise
+            wait = _retry_wait({}, attempt)
+        else:
+            if response.status_code not in RETRY_STATUSES or attempt >= RETRIES:
+                return response
+            wait = _retry_wait(response.headers, attempt)
+        time.sleep(wait)
+        attempt += 1
+
+
+def _ok(response: requests.Response) -> bool:
+    return 200 <= response.status_code < 300
+
+
 def request(
     method: str,
     path: str,
@@ -101,56 +126,31 @@ def request(
 ) -> tuple[int, Any]:
     """Send a JSON request to the API and return (status, decoded body).
 
-    Retries 429, 502, 503, and network errors, waiting for Retry-After. POST requests
-    must carry an Idempotency-Key so that a retry never charges twice.
+    POST requests must carry an Idempotency-Key so that a retry never charges twice.
     """
     url = path if path.startswith("https://") or path.startswith("http://") else base_url() + path
-    data = None if body is None else json.dumps(body).encode()
     sent = {"User-Agent": USER_AGENT, "Accept": "application/json"}
-    if data is not None:
-        sent["Content-Type"] = "application/json"
     if key:
         sent["Authorization"] = f"Bearer {key}"
     sent.update(headers or {})
-    for attempt in range(RETRIES + 1):
-        req = urllib.request.Request(url, data=data, method=method, headers=sent)
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as response:
-                payload = response.read()
-                return response.status, json.loads(payload) if payload else None
-        except urllib.error.HTTPError as error:
-            payload = error.read()
-            if error.code in RETRY_STATUSES and attempt < RETRIES:
-                time.sleep(_retry_wait(error.headers, attempt))
-                continue
-            raise _api_error(error.code, payload) from None
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
-            if attempt < RETRIES:
-                time.sleep(_retry_wait({}, attempt))
-                continue
-            host = urllib.parse.urlsplit(url).netloc
-            raise SakuranboError(f"Could not reach {host}: {error}") from None
-    raise SakuranboError("Sakuranbo AI did not respond.")
+    try:
+        response = _send(method, url, headers=sent, timeout=timeout, body=body)
+    except requests.RequestException as error:
+        raise SakuranboError(f"Could not reach {urlsplit(url).netloc} ({type(error).__name__}).") from None
+    if not _ok(response):
+        raise _api_error(response.status_code, response.content)
+    return response.status_code, json.loads(response.content) if response.content else None
 
 
 def download(url: str, timeout: float = 300) -> bytes:
     """Download an output file. The signed URL needs no API key; never log it."""
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    for attempt in range(RETRIES + 1):
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as response:
-                return response.read()
-        except urllib.error.HTTPError as error:
-            if error.code in RETRY_STATUSES and attempt < RETRIES:
-                time.sleep(_retry_wait(error.headers, attempt))
-                continue
-            raise SakuranboError(f"Could not download the output (HTTP {error.code}).") from None
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
-            if attempt < RETRIES:
-                time.sleep(_retry_wait({}, attempt))
-                continue
-            raise SakuranboError(f"Could not download the output: {error}") from None
-    raise SakuranboError("Could not download the output.")
+    try:
+        response = _send("GET", url, headers={"User-Agent": USER_AGENT}, timeout=timeout)
+    except requests.RequestException as error:
+        raise SakuranboError(f"Could not download the output ({type(error).__name__}).") from None
+    if not _ok(response):
+        raise SakuranboError(f"Could not download the output (HTTP {response.status_code}).")
+    return response.content
 
 
 def wait_for_job(
@@ -196,14 +196,16 @@ def list_models(modality: str, task: str) -> list[dict]:
     cached = _models_cache.get(cache_key)
     if cached and time.monotonic() - cached[0] < MODELS_TTL_SECONDS:
         return cached[1]
-    query = urllib.parse.urlencode({"modality": modality, "task": task})
-    req = urllib.request.Request(
-        f"{base_url()}/v1/models?{query}", headers={"User-Agent": USER_AGENT, "Accept": "application/json"}
-    )
     try:
-        with urllib.request.urlopen(req, timeout=MODELS_TIMEOUT_SECONDS) as response:
-            models = [m for m in json.loads(response.read()).get("data", []) if m.get("id")]
-    except (urllib.error.URLError, TimeoutError, ConnectionError, ValueError):
+        response = requests.get(
+            f"{base_url()}/v1/models",
+            params={"modality": modality, "task": task},
+            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+            timeout=MODELS_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        models = [m for m in response.json().get("data", []) if m.get("id")]
+    except (requests.RequestException, ValueError):
         return cached[1] if cached else []
     _models_cache[cache_key] = (time.monotonic(), models)
     return models
