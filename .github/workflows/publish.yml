@@ -15,6 +15,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - run: python3 tools/provenance_check.py all
-      - uses: Comfy-Org/publish-node-action@7578cdb0c1410f2515e6f9b1443c6859cab94f05 # 1.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
-          personal_access_token: ${{ secrets.REGISTRY_ACCESS_TOKEN }}
+          python-version: "3.12"
+      # comfy-cli changes its global options between releases (1.25.0 dropped --yes), so pin it.
+      - run: pip install comfy-cli==1.25.0
+      - run: comfy --skip-prompt tracking disable
+      - run: comfy --skip-prompt node publish --token "$REGISTRY_ACCESS_TOKEN"
+        env:
+          REGISTRY_ACCESS_TOKEN: ${{ secrets.REGISTRY_ACCESS_TOKEN }}
